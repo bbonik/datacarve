@@ -80,7 +80,12 @@ def main():
 
     # the real bundled dataset: 11K x 6, D5 linearly dependent on D0/D3;
     # this instance previously exhausted CBC's 10s budget
-    real = scipy.io.loadmat("data/DATA_random_6D.mat")["A"]
+    from pathlib import Path
+    data_file = (
+        Path(__file__).parent.parent / "examples" / "data"
+        / "DATA_random_6D.mat"
+    )
+    real = scipy.io.loadmat(data_file)["A"]
     real = (real - real.min(axis=0)) / (real.max(axis=0) - real.min(axis=0))
 
     rng = np.random.default_rng(42)

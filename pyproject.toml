@@ -54,8 +54,8 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/bbonik/distributional_dataset_undersampling"
-Repository = "https://github.com/bbonik/distributional_dataset_undersampling"
+Homepage = "https://github.com/bbonik/datacarve"
+Repository = "https://github.com/bbonik/datacarve"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -11,17 +11,21 @@ changing the ``target_distribution`` argument to 'gaussian', 'weibull',
 Author: Vasileios Vonikakis
 """
 
+from pathlib import Path
+
 import matplotlib.pyplot as plt
 import scipy.io
 
 from datacarve import undersample_dataset
+
+DATA_FILE = Path(__file__).parent / "data" / "DATA_random_6D.mat"
 
 
 def main() -> None:
     plt.close("all")
 
     # load the precomputed 6-dimensional dataset
-    data = scipy.io.loadmat("data/DATA_random_6D.mat")["A"]
+    data = scipy.io.loadmat(DATA_FILE)["A"]
 
     indices_to_keep = undersample_dataset(
         data=data,

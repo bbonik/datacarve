@@ -261,3 +261,128 @@ class TestPlotting:
 
         plot_scatter_matrix(uniform_data[:100], title="test")
         plt.close("all")
+
+
+# ------------------------------------------------- per-dimension targets
+
+
+class TestPerDimensionTargets:
+    def test_different_targets_per_dimension(self):
+        rng = np.random.default_rng(10)
+        data = rng.random((3000, 2))
+        mask = undersample_dataset(
+            data, data_to_keep=400, bins=10,
+            target_distribution=["uniform", "gaussian"], **QUIET,
+        )
+        subset = data[mask]
+        assert mask.sum() == 400
+
+        # dim 0 should be flat
+        counts0, _ = np.histogram(subset[:, 0], bins=10, range=(0, 1))
+        assert np.all(np.abs(counts0 - 40) <= 5)
+
+        # dim 1 should be center-heavy
+        counts1, _ = np.histogram(subset[:, 1], bins=10, range=(0, 1))
+        assert counts1[4] + counts1[5] > counts1[0] + counts1[9] + 20
+
+    def test_mixed_name_and_custom_weights(self):
+        rng = np.random.default_rng(11)
+        data = rng.random((2000, 2))
+        mask = undersample_dataset(
+            data, data_to_keep=200, bins=10,
+            target_distribution=[
+                "uniform",
+                [1, 1, 1, 1, 1, 0, 0, 0, 0, 0],  # lower half only
+            ],
+            **QUIET,
+        )
+        subset = data[mask]
+        counts1, _ = np.histogram(subset[:, 1], bins=10, range=(0, 1))
+        # upper-half bins of dim 1 should be (close to) empty
+        assert counts1[5:].sum() <= 4
+
+    def test_wrong_number_of_specs_raises(self):
+        rng = np.random.default_rng(12)
+        data = rng.random((500, 3))
+        with pytest.raises(ValueError, match="one spec per"):
+            undersample_dataset(
+                data, data_to_keep=100,
+                target_distribution=["uniform", "gaussian"],  # 2 specs, 3 dims
+                **QUIET,
+            )
+
+    def test_flat_numeric_list_still_means_single_target(self):
+        """Backward compatibility: a flat weight list applies to all dims."""
+        rng = np.random.default_rng(13)
+        data = rng.random((1000, 3))
+        mask = undersample_dataset(
+            data, data_to_keep=100, bins=10,
+            target_distribution=[1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+            **QUIET,
+        )
+        assert mask.sum() == 100
+
+
+# ------------------------------------------------- categorical dimensions
+
+
+class TestCategoricalDims:
+    @pytest.fixture
+    def data_with_category(self):
+        """Numeric dim + imbalanced 3-value categorical dim (70/20/10%)."""
+        rng = np.random.default_rng(20)
+        n = 3000
+        numeric = rng.random(n)
+        category = rng.choice([0.0, 1.0, 2.0], size=n, p=[0.7, 0.2, 0.1])
+        return np.column_stack([numeric, category])
+
+    def test_balances_imbalanced_categories(self, data_with_category):
+        mask = undersample_dataset(
+            data_with_category, data_to_keep=300,
+            categorical_dims=[1], **QUIET,
+        )
+        subset = data_with_category[mask]
+        counts = [np.sum(subset[:, 1] == c) for c in (0.0, 1.0, 2.0)]
+        # uniform target over 3 categories -> 100 each
+        assert np.all(np.abs(np.array(counts) - 100) <= 2), counts
+
+    def test_custom_weights_per_category(self, data_with_category):
+        mask = undersample_dataset(
+            data_with_category, data_to_keep=300,
+            target_distribution=["uniform", [3, 2, 1]],
+            categorical_dims=[1], **QUIET,
+        )
+        subset = data_with_category[mask]
+        counts = [np.sum(subset[:, 1] == c) for c in (0.0, 1.0, 2.0)]
+        # 3:2:1 target over 300 -> 150/100/50
+        assert np.all(np.abs(np.array(counts) - [150, 100, 50]) <= 2), counts
+
+    def test_category_values_need_not_be_contiguous(self):
+        rng = np.random.default_rng(21)
+        n = 1000
+        data = np.column_stack([
+            rng.random(n),
+            rng.choice([-5.0, 3.5, 100.0], size=n, p=[0.6, 0.3, 0.1]),
+        ])
+        mask = undersample_dataset(
+            data, data_to_keep=150, categorical_dims=[1], **QUIET,
+        )
+        subset = data[mask]
+        counts = [np.sum(subset[:, 1] == c) for c in (-5.0, 3.5, 100.0)]
+        assert np.all(np.abs(np.array(counts) - 50) <= 2), counts
+
+    def test_bad_categorical_index_raises(self, data_with_category):
+        with pytest.raises(ValueError, match="categorical_dims"):
+            undersample_dataset(
+                data_with_category, data_to_keep=100,
+                categorical_dims=[5], **QUIET,
+            )
+
+    def test_categorical_weights_wrong_length_raises(self, data_with_category):
+        # dim 1 has 3 categories; 4 weights should fail
+        with pytest.raises(ValueError, match="shape"):
+            undersample_dataset(
+                data_with_category, data_to_keep=100,
+                target_distribution=["uniform", [1, 2, 3, 4]],
+                categorical_dims=[1], **QUIET,
+            )

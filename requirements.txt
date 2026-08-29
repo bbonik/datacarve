@@ -7,5 +7,5 @@ scipy==1.18.1
 pandas==3.0.5
 matplotlib==3.11.1
 
-# Optional: only needed for explore_datasets.py
+# Optional: only needed for examples/example_sklearn_datasets.py
 scikit-learn==1.9.0

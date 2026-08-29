@@ -1,6 +1,6 @@
 # datacarve
 
-[![CI](https://github.com/bbonik/distributional_dataset_undersampling/actions/workflows/ci.yml/badge.svg)](https://github.com/bbonik/distributional_dataset_undersampling/actions/workflows/ci.yml)
+[![CI](https://github.com/bbonik/datacarve/actions/workflows/ci.yml/badge.svg)](https://github.com/bbonik/datacarve/actions/workflows/ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -8,7 +8,7 @@
 
 `datacarve` is a Mixed Integer Linear Programming (**MILP**) Python tool for **undersampling a dataset** while enforcing a particular **target distribution** across multiple dimensions. It leverages the (possible) **redundancies** in a large dataset to generate a more **compact** version of it with a specified target distribution across each attribute/dimension, while simultaneously minimizing linear correlations among them.
 
-<img src="https://github.com/bbonik/distributional_dataset_undersampling/blob/master/data/example.png" width="900" height="900">
+<img src="https://github.com/bbonik/datacarve/raw/master/assets/example.png" width="900" height="900">
 
 ## Introduction
 
@@ -70,8 +70,8 @@ pip install "datacarve[plot]"    # core + scatterplot matrices
 Or from source:
 
 ```bash
-git clone https://github.com/bbonik/distributional_dataset_undersampling.git
-cd distributional_dataset_undersampling
+git clone https://github.com/bbonik/datacarve.git
+cd datacarve
 
 # create and activate a virtual environment
 python3 -m venv .venv
@@ -120,13 +120,40 @@ Useful options:
 |---|---|---|
 | `data_to_keep` | `1000` | Number of datapoints to keep. |
 | `data_scaling` | `'minmax'` | Per-feature scaling to [0, 1]. Use `None` if the data is already scaled. |
-| `target_distribution` | `'uniform'` | Built-in name or a custom array of bin weights. |
-| `bins` | `10` | Quantization bins per dimension. |
+| `target_distribution` | `'uniform'` | Built-in name, a custom array of bin weights, or a list with one spec per dimension. See [Per-dimension targets](#per-dimension-targets-and-categorical-attributes). |
+| `bins` | `10` | Quantization bins per numeric dimension. Categorical dimensions use one bin per unique value. |
+| `categorical_dims` | `None` | Column indices to treat as categorical (one bin per unique value). |
 | `lamda` | `0.5` | Balance between distribution matching (`0`) and correlation minimization (`>0`). |
 | `solver` | `'CBC'` | MILP solver backend: `'CBC'`, `'SCIP'`, or `'SAT'`. See [Choosing a solver](#choosing-a-solver). |
 | `max_solver_time_sec` | `10.0` | Time budget for the MILP solver. Increase for large datasets. |
 | `verbose` | `True` | Print progress and solver statistics. |
 | `scatterplot_matrix` | `'auto'` | Show scatterplot matrices (auto-disabled for >10 dimensions). |
+
+## Per-dimension targets and categorical attributes
+
+Each dimension can get its **own target distribution** — pass a list with one spec per dimension, mixing built-in names and custom weight arrays:
+
+```python
+mask = undersample_dataset(
+    data=data,  # shape (N, 3)
+    data_to_keep=500,
+    target_distribution=["uniform", "gaussian", [1, 2, 3, 4, 5, 5, 4, 3, 2, 1]],
+)
+```
+
+**Categorical attributes** (e.g. gender, race, class labels) should not be quantized into equal-width bins. Mark them with `categorical_dims` and each unique value becomes its own bin, so `'uniform'` means "equal counts per category":
+
+```python
+# column 2 holds a label-encoded category (e.g. 0=A, 1=B, 2=C)
+mask = undersample_dataset(
+    data=data,
+    data_to_keep=300,
+    target_distribution=["uniform", "uniform", [3, 2, 1]],  # 3:2:1 over categories
+    categorical_dims=[2],
+)
+```
+
+This is the typical recipe for fairness-style curation: balance the categorical attributes exactly (equal counts per gender/race/label) while shaping the continuous attributes (age, pose, brightness) to a target distribution — all jointly, in one optimization.
 
 ## Choosing a solver
 
@@ -150,13 +177,17 @@ What makes an instance "hard"? More datapoints, more dimensions, strongly imbala
 
 ## Examples
 
-- **`example1.py`** — undersamples the bundled 6-dimensional dataset (11K datapoints) down to a uniform 1K subset.
-- **`example2.py`** — generates a random N-dimensional dataset (a different random distribution per dimension) and undersamples it.
-- **`explore_datasets.py`** — applies the technique to classic scikit-learn datasets (diabetes, iris, breast cancer). Requires `scikit-learn`.
+See the [`examples/`](examples/) folder:
+
+- **`example_6d_dataset.py`** — undersamples the bundled 6-dimensional dataset (11K datapoints) down to a uniform 1K subset.
+- **`example_random_data.py`** — generates a random N-dimensional dataset (a different random distribution per dimension) and undersamples it.
+- **`example_sklearn_datasets.py`** — applies the technique to classic scikit-learn datasets (diabetes, iris, breast cancer). Requires `scikit-learn`.
 
 ```bash
-python example1.py
+python examples/example_6d_dataset.py
 ```
+
+Solver benchmarks live in [`benchmarks/`](benchmarks/).
 
 ## Citations
 

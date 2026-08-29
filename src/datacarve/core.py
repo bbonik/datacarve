@@ -101,7 +101,52 @@ def _build_target_pdf(
     return pdf / total  # normalize so bin counts sum to ~data_to_keep
 
 
-def _pairwise_correlation_cost(data: np.ndarray, avg: float) -> np.ndarray:
+def _normalize_target_specs(
+    target_distribution: (
+        TargetDistribution
+        | Sequence[float]
+        | Sequence[TargetDistribution | Sequence[float]]
+    ),
+    n_dimensions: int,
+) -> list:
+    """
+    Expand the ``target_distribution`` argument into one spec per dimension.
+
+    Accepted forms:
+
+    * a single name ('uniform', ...): applied to every dimension;
+    * a flat sequence of numbers: a single custom histogram applied to
+      every dimension;
+    * a sequence of specs (names and/or nested weight sequences), one per
+      dimension.
+
+    Returns
+    -------
+    list of length n_dimensions
+        One target spec (str or array-like of weights) per dimension.
+    """
+    if isinstance(target_distribution, str):
+        return [target_distribution] * n_dimensions
+
+    specs = list(target_distribution)
+
+    # a flat sequence of numbers = one custom histogram for all dimensions
+    if all(isinstance(el, (int, float, np.integer, np.floating))
+           for el in specs):
+        return [specs] * n_dimensions
+
+    # otherwise: one spec per dimension
+    if len(specs) != n_dimensions:
+        raise ValueError(
+            f"Per-dimension target_distribution must have one spec per "
+            f"dimension ({n_dimensions}), got {len(specs)}."
+        )
+    return specs
+
+
+def _pairwise_correlation_cost(
+    data: np.ndarray, avg: np.ndarray | float
+) -> np.ndarray:
     """
     Per-datapoint cost used to discourage linear correlations (2nd objective).
 
@@ -117,15 +162,16 @@ def _pairwise_correlation_cost(data: np.ndarray, avg: float) -> np.ndarray:
     ----------
     data : numpy.ndarray of shape (N, M)
         Scaled dataset.
-    avg : float
-        Expected mean value of the target distribution.
+    avg : float or numpy.ndarray of shape (M,)
+        Expected mean value of the target distribution, either shared by
+        all dimensions or one value per dimension.
 
     Returns
     -------
     numpy.ndarray of shape (N,)
         Correlation cost per datapoint.
     """
-    d = np.abs(data - avg)  # (N, M)
+    d = np.abs(data - avg)  # (N, M), avg broadcasts per column
     return (d.sum(axis=1) ** 2 - (d**2).sum(axis=1)) / 2.0
 
 
@@ -133,8 +179,13 @@ def undersample_dataset(
     data: np.ndarray,
     data_to_keep: int = 1000,
     data_scaling: Literal["minmax"] | None = "minmax",
-    target_distribution: TargetDistribution | Sequence[float] = "uniform",
+    target_distribution: (
+        TargetDistribution
+        | Sequence[float]
+        | Sequence[TargetDistribution | Sequence[float]]
+    ) = "uniform",
     bins: int = 10,
+    categorical_dims: Sequence[int] | None = None,
     lamda: float = 0.5,
     solver: Literal["CBC", "SCIP", "SAT"] = "CBC",
     max_solver_time_sec: float = 10.0,
@@ -159,14 +210,29 @@ def undersample_dataset(
     data_scaling : {'minmax', None}
         Scaling applied to each feature before quantization. With None,
         no scaling is applied and the data is expected to lie in [0, 1].
-    target_distribution : {'uniform', 'gaussian', 'weibull', 'triangular'} or array-like
-        Distribution to enforce on every dimension of the undersampled
-        dataset. 'uniform' produces a balanced dataset. Alternatively, a
-        custom sequence of ``bins`` non-negative weights (one per bin) can
-        be provided.
+    target_distribution : str, array-like, or sequence of these
+        Distribution to enforce on the undersampled dataset. Three forms
+        are accepted:
+
+        * a single name ('uniform', 'gaussian', 'weibull', 'triangular'):
+          enforced on every dimension. 'uniform' produces a balanced
+          dataset;
+        * a flat sequence of non-negative weights (one per bin): a single
+          custom histogram enforced on every dimension;
+        * a sequence with one spec per dimension, mixing names and custom
+          weight sequences, e.g. ``['uniform', 'gaussian', [1, 2, 3]]``
+          for 3-dimensional data. For categorical dimensions, custom
+          weights must have one entry per category.
     bins : int
-        Number of bins into which each dimension is quantized for the
-        integer program.
+        Number of bins into which each numeric dimension is quantized for
+        the integer program. Categorical dimensions ignore this and use
+        one bin per unique value.
+    categorical_dims : sequence of int, optional
+        Column indices to treat as categorical. Each unique value in such
+        a column becomes its own bin, so a 'uniform' target means "equal
+        counts per category". Values must be numeric (e.g. label-encoded);
+        the encoding order is only used for reporting, not for binning
+        width.
     lamda : float
         Balance between the two objectives: distribution matching vs
         correlation minimization. ``lamda=0`` uses only distributional
@@ -225,10 +291,15 @@ def undersample_dataset(
     >>> mask = undersample_dataset(data, data_to_keep=500, verbose=False,
     ...                            scatterplot_matrix=False)
     >>> subset = data[mask]
-    """
-    # TODO: allow different target distributions per dimension.
-    # TODO: wildcard dimensions (no constraint on selected dimensions).
 
+    Per-dimension targets and a categorical column (index 2):
+
+    >>> mask = undersample_dataset(
+    ...     data, data_to_keep=500,
+    ...     target_distribution=['uniform', 'gaussian', 'uniform', 'uniform'],
+    ...     categorical_dims=[2],
+    ...     verbose=False, scatterplot_matrix=False)
+    """
     # ------------------------------------------------------ input validation
 
     data = np.asarray(data, dtype=float)
@@ -249,6 +320,15 @@ def undersample_dataset(
         )
     solver_backend = solver
 
+    categorical_set = set(int(c) for c in categorical_dims or [])
+    if categorical_set and not all(
+        0 <= c < n_dimensions for c in categorical_set
+    ):
+        raise ValueError(
+            f"categorical_dims entries must be column indices in "
+            f"[0, {n_dimensions - 1}], got {sorted(categorical_set)}."
+        )
+
     if scatterplot_matrix == "auto":
         scatterplot_matrix = n_dimensions <= 10
 
@@ -262,23 +342,44 @@ def undersample_dataset(
         span[span == 0] = 1.0  # constant features: avoid division by zero
         data = (data - data_min) / span
 
-    # ------------------------------------------- target distribution per bin
-
-    target_pdf = _build_target_pdf(target_distribution, bins)
-    target_name = (
-        target_distribution
-        if isinstance(target_distribution, str)
-        else "custom"
-    )
-
     # ----------------------------------------------- quantize data into bins
 
     if verbose:
         print("\nQuantizing dataset...")
 
-    # digitize returns bin indices in [1, bins+1]; shift to [0, bins-1]
-    data_quantized = np.digitize(data, bins=np.linspace(0, 1, bins + 1)) - 1
-    data_quantized[data_quantized == bins] = bins - 1  # datapoints at 1.0
+    # numeric dimensions: `bins` equal-width bins over [0, 1];
+    # categorical dimensions: one bin per unique value
+    data_quantized = np.zeros((n_observations, n_dimensions), dtype=int)
+    n_bins_per_dim: list[int] = []
+    edges = np.linspace(0, 1, bins + 1)
+
+    for m in range(n_dimensions):
+        if m in categorical_set:
+            _, codes = np.unique(data[:, m], return_inverse=True)
+            data_quantized[:, m] = codes
+            n_bins_per_dim.append(int(codes.max()) + 1)
+        else:
+            # digitize returns indices in [1, bins+1]; shift to [0, bins-1]
+            q = np.digitize(data[:, m], bins=edges) - 1
+            q[q == bins] = bins - 1  # datapoints exactly at 1.0
+            data_quantized[:, m] = q
+            n_bins_per_dim.append(bins)
+
+    # ------------------------------------------ target distribution per bin
+
+    specs = _normalize_target_specs(target_distribution, n_dimensions)
+    target_pdfs = [
+        _build_target_pdf(spec, n_bins_per_dim[m])
+        for m, spec in enumerate(specs)
+    ]
+
+    str_specs = [s for s in specs if isinstance(s, str)]
+    if len(str_specs) == n_dimensions and len(set(str_specs)) == 1:
+        target_name = str_specs[0]
+    elif isinstance(target_distribution, str):
+        target_name = target_distribution
+    else:
+        target_name = "custom"
 
     # ---------------------------------------- display original distributions
 
@@ -291,12 +392,12 @@ def undersample_dataset(
     # ------------------------------------------------------ build the MILP
     #
     # Variables:
-    #   x[0..N-1]              binary   -> 1 if datapoint is selected
-    #   s[0..M*bins-1]         slack per (dimension, bin) cell
-    #                          (continuous; integer for the SAT backend,
-    #                          which only supports integer arithmetic --
-    #                          equivalent here since bin-count deviations
-    #                          are integral)
+    #   x[0..N-1]                    binary -> 1 if datapoint is selected
+    #   s[0..sum(bins_per_dim)-1]    slack per (dimension, bin) cell
+    #                                (continuous; integer for the SAT
+    #                                backend, which only supports integer
+    #                                arithmetic -- equivalent here since
+    #                                bin-count deviations are integral)
     #
     # Objective:
     #   minimize  lamda * sum_k v[k] * x[k]  +  sum s
@@ -304,7 +405,7 @@ def undersample_dataset(
     #
     # Constraints:
     #   sum x == data_to_keep
-    #   for every (dimension m, bin n) with target count b = pdf[n]*keep:
+    #   for every (dimension m, bin n) with target count b = pdf_m[n]*keep:
     #       count_selected(m, n) - s[m,n] <= b     (upper slack bound)
     #      -count_selected(m, n) - s[m,n] <= -b    (lower slack bound)
     #   i.e. |count_selected - b| <= s, and s is minimized.
@@ -319,12 +420,25 @@ def undersample_dataset(
         )
     solver.SetTimeLimit(int(max_solver_time_sec * 1000))  # milliseconds
 
-    # expected mean of the target distribution (used by the correlation cost)
-    bin_centers = (np.arange(1, bins + 1) - 0.5) / bins
-    avg = float(np.dot(bin_centers, target_pdf))
+    # expected mean of each dimension's target distribution (used by the
+    # correlation cost); for categorical dims, categories are mapped to
+    # evenly spaced points in [0, 1] for this purpose
+    avg = np.empty(n_dimensions)
+    data_for_corr = data.copy()
+    for m in range(n_dimensions):
+        n_bins_m = n_bins_per_dim[m]
+        centers = (np.arange(1, n_bins_m + 1) - 0.5) / n_bins_m
+        avg[m] = float(np.dot(centers, target_pdfs[m]))
+        if m in categorical_set:
+            data_for_corr[:, m] = centers[data_quantized[:, m]]
 
     # 2nd objective: per-datapoint correlation cost (vectorized)
-    v = _pairwise_correlation_cost(data, avg)
+    v = _pairwise_correlation_cost(data_for_corr, avg)
+
+    # slack bookkeeping: dimension m owns slots
+    # [slack_offset[m], slack_offset[m+1]) in the slack vector
+    slack_offset = np.concatenate([[0], np.cumsum(n_bins_per_dim)])
+    n_slacks = int(slack_offset[-1])
 
     # decision variables (slacks are >= 0 at any optimum, so bound them at 0;
     # the SAT backend requires integer variables, which is equivalent here
@@ -333,12 +447,12 @@ def undersample_dataset(
     if solver_backend == "SAT":
         s = [
             solver.IntVar(0, n_observations, f"s[{i}]")
-            for i in range(n_dimensions * bins)
+            for i in range(n_slacks)
         ]
     else:
         s = [
             solver.NumVar(0, solver.infinity(), f"s[{i}]")
-            for i in range(n_dimensions * bins)
+            for i in range(n_slacks)
         ]
 
     # objective: correlation cost on selections + sum of slacks
@@ -351,16 +465,16 @@ def undersample_dataset(
     solver.Add(solver.Sum(x) == data_to_keep)
 
     # distribution constraints per (dimension, bin)
-    total_constraints = n_dimensions * bins
+    total_constraints = n_slacks
     if verbose:
         print(f"Adding constraints [{0:3d}%]", end="")
 
     k = 0
     for m in range(n_dimensions):
-        for n in range(bins):
+        for n in range(n_bins_per_dim[m]):
             # target count of selected datapoints in this (dimension, bin)
-            b = np.ceil(target_pdf[n] * data_to_keep)
-            slack = s[m * bins + n]
+            b = np.ceil(target_pdfs[m][n] * data_to_keep)
+            slack = s[slack_offset[m] + n]
 
             # selected datapoints falling in bin n of dimension m
             members = np.flatnonzero(data_quantized[:, m] == n)

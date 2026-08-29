@@ -1,0 +1,11 @@
+# Development environment pins (verified with Python 3.12).
+# For installation as a library, prefer: pip install -e ".[plot]"
+# Core dependencies
+ortools==9.15.6755
+numpy==2.5.2
+scipy==1.18.1
+pandas==3.0.5
+matplotlib==3.11.1
+
+# Optional: only needed for explore_datasets.py
+scikit-learn==1.9.0

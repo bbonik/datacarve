@@ -1,46 +1,43 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
-Created on Thu May 23 22:44:36 2019
-@author: bbonik
+Example 1: undersampling a precomputed 6-dimensional dataset.
 
-Example script to demonstrate the use of the distributional undersampling
-technique. A 6-dimensional dataset is loaded. Then the undersampling function 
-is called, in order to create a balanced subset across all 6 dimensions. 
-Different tarket distributions can be achieved by using the correct input
-string.
+Loads a 6-dimensional dataset (11K datapoints) from a .mat file and calls
+the undersampling function to create a balanced (uniform) subset of 1000
+datapoints across all 6 dimensions. Try other target distributions by
+changing the ``target_distribution`` argument to 'gaussian', 'weibull',
+'triangular', or a custom array of bin weights.
+
+Author: Vasileios Vonikakis
 """
 
-import scipy.io
 import matplotlib.pyplot as plt
-from distributional_undersampling import undersample_dataset
+import scipy.io
+
+from datacarve import undersample_dataset
 
 
+def main() -> None:
+    plt.close("all")
 
+    # load the precomputed 6-dimensional dataset
+    data = scipy.io.loadmat("data/DATA_random_6D.mat")["A"]
 
-def main():
+    indices_to_keep = undersample_dataset(
+        data=data,
+        data_to_keep=1000,
+        target_distribution="uniform",
+        bins=10,
+        lamda=0.5,
+        verbose=True,
+        scatterplot_matrix="auto",
+    )
 
-    plt.close('all')
-    
-    # loading precomputed 6-dimensional data
-    data = scipy.io.loadmat('data/DATA_random_6D.mat')['A']
-  
-    indices_to_keep = undersample_dataset(data=data,
-                                          data_to_keep=1000,
-                                          target_distribution='uniform',
-                                          bins=10,
-                                          lamda=0.5,
-                                          verbose=True,
-                                          scatterplot_matrix='auto')
-    
     data_undersampled = data[indices_to_keep]
-    
-    print ('Original dataset size:', str(data.shape))
-    print ('Undersampled dataset size:', str(data_undersampled.shape))
-    
+
+    print(f"Original dataset size: {data.shape}")
+    print(f"Undersampled dataset size: {data_undersampled.shape}")
 
 
-
-if __name__ == '__main__':
-  main()
-
+if __name__ == "__main__":
+    main()

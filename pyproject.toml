@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "datacarve"
+version = "0.1.0"
+description = "Distributional dataset undersampling: carve a balanced subset out of a large dataset with MILP optimization, enforcing target distributions across all dimensions simultaneously."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "Vasileios Vonikakis" },
+]
+keywords = [
+    "distributional dataset undersampling",
+    "undersampling",
+    "dataset balancing",
+    "subset selection",
+    "MILP",
+    "integer programming",
+    "data shaping",
+    "fairness",
+    "imbalanced data",
+    "sampling",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Mathematics",
+]
+dependencies = [
+    "ortools>=9.8",
+    "numpy>=1.26",
+    "scipy>=1.11",
+]
+
+[project.optional-dependencies]
+plot = [
+    "pandas>=2.0",
+    "matplotlib>=3.8",
+]
+dev = [
+    "pytest>=8.0",
+    "pandas>=2.0",
+    "matplotlib>=3.8",
+]
+
+[project.urls]
+Homepage = "https://github.com/bbonik/distributional_dataset_undersampling"
+Repository = "https://github.com/bbonik/distributional_dataset_undersampling"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

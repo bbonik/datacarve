@@ -1,0 +1,23 @@
+# Virtual environment
+.venv/
+venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# OS files
+.DS_Store
+
+# Editors
+.idea/
+.vscode/
+
+# Internal planning docs
+PUBLICITY_PLAN.md
+
+# Build artifacts
+dist/
+build/
+*.egg-info/

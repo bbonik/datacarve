@@ -1,5 +1,7 @@
 # Building fair evaluation sets is a combinatorial problem. Here's how to solve it exactly.
 
+*Also published [on Medium](https://medium.com/@bbonik/building-fair-evaluation-sets-is-a-combinatorial-problem-heres-how-to-solve-it-exactly-539b7df183f7).*
+
 Overall accuracy is a weighted average — and the weights are whatever your evaluation set happens to contain. If your eval set is 90% group A and 10% group B, a model scoring 95% on A but only **60% on B** still reports a comfortable **91.5% overall**:
 
 ![How a skewed eval set dilutes a per-group failure](https://github.com/bbonik/datacarve/raw/master/assets/skewed_eval_dilution.png)

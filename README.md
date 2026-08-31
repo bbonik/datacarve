@@ -19,6 +19,8 @@ subset = data[mask]
 
 `datacarve` selects the **provably optimal subset** of a dataset whose attributes jointly follow the distributions you specify — balanced across any number of dimensions, numeric or categorical, *all at once* (e.g. gender *and* age *and* race *and* label). Typical uses: **fair evaluation sets** for bias audits and Responsible AI compliance, **LLM data mixtures** (eval suites, SFT subsets, red-teaming pools), quota samples, and matched cohorts. Under the hood it is a Mixed Integer Linear Programming (**MILP**) formulation that exploits the redundancies of a large dataset to carve a compact, distribution-shaped version of it, while also minimizing cross-attribute correlations. Formerly known as `distributional_dataset_undersampling`.
 
+Launch article: [Building fair evaluation sets is a combinatorial problem — here's how to solve it exactly](https://medium.com/@bbonik/building-fair-evaluation-sets-is-a-combinatorial-problem-heres-how-to-solve-it-exactly-539b7df183f7) (also [readable in this repo](docs/building-fair-evaluation-sets.md)).
+
 <img src="https://github.com/bbonik/datacarve/raw/master/assets/example.png" width="900">
 
 ## The problem: your dataset is imbalanced in several ways at once

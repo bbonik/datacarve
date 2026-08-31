@@ -544,6 +544,7 @@ def plot_scatter_matrix(
     show_correlation: bool = True,
     alpha: float | None = None,
     title: str | None = None,
+    save_path: str | None = None,
 ) -> None:
     """
     Plot a customized scatterplot matrix (based on pandas).
@@ -564,6 +565,9 @@ def plot_scatter_matrix(
         datasets, less transparent for smaller ones.
     title : str, optional
         Title displayed above the scatterplot matrix.
+    save_path : str, optional
+        If given, the figure is also saved to this path (format inferred
+        from the extension, e.g. '.png').
     """
     # imported lazily so the optimizer can run in headless environments
     import matplotlib.pyplot as plt
@@ -597,5 +601,8 @@ def plot_scatter_matrix(
 
     if title is not None:
         plt.suptitle(title)
+
+    if save_path is not None:
+        plt.gcf().savefig(save_path, dpi=150, bbox_inches="tight")
 
     plt.show()

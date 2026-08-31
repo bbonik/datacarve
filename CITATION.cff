@@ -1,0 +1,51 @@
+cff-version: 1.2.0
+message: >-
+  If you use this software, please cite it using the metadata from this
+  file, and cite the associated papers listed under 'references'.
+title: "datacarve: distributional dataset undersampling via MILP optimization"
+type: software
+authors:
+  - family-names: Vonikakis
+    given-names: Vasileios
+repository-code: "https://github.com/bbonik/datacarve"
+license: MIT
+keywords:
+  - dataset undersampling
+  - dataset balancing
+  - subset selection
+  - mixed integer linear programming
+  - fairness
+references:
+  - type: article
+    title: >-
+      A Probabilistic Approach to People-Centric Photo Selection and
+      Sequencing
+    authors:
+      - family-names: Vonikakis
+        given-names: Vasileios
+      - family-names: Subramanian
+        given-names: Ramanathan
+      - family-names: Arnfred
+        given-names: Jonas
+      - family-names: Winkler
+        given-names: Stefan
+    journal: IEEE Transactions on Multimedia
+    volume: 19
+    issue: 11
+    start: 2609
+    end: 2624
+    year: 2017
+  - type: conference-paper
+    title: >-
+      Shaping Datasets: Optimal Data Selection for Specific Target
+      Distributions
+    authors:
+      - family-names: Vonikakis
+        given-names: Vasileios
+      - family-names: Subramanian
+        given-names: Ramanathan
+      - family-names: Winkler
+        given-names: Stefan
+    conference:
+      name: "IEEE International Conference on Image Processing (ICIP 2016)"
+    year: 2016

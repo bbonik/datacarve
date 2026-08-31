@@ -6,9 +6,19 @@
 
 **Carve a balanced subset out of a large dataset — distributional dataset undersampling via MILP optimization.**
 
-`datacarve` is a Mixed Integer Linear Programming (**MILP**) Python tool for **undersampling a dataset** while enforcing a particular **target distribution** across multiple dimensions. It leverages the (possible) **redundancies** in a large dataset to generate a more **compact** version of it with a specified target distribution across each attribute/dimension, while simultaneously minimizing linear correlations among them.
+```bash
+pip install datacarve
+```
+```python
+from datacarve import undersample_dataset
 
-<img src="https://github.com/bbonik/datacarve/raw/master/assets/example.png" width="900" height="900">
+mask = undersample_dataset(data, data_to_keep=1000)  # balanced across ALL dimensions
+subset = data[mask]
+```
+
+`datacarve` is a Mixed Integer Linear Programming (**MILP**) Python tool for **undersampling a dataset** while enforcing a particular **target distribution** across multiple dimensions. It leverages the (possible) **redundancies** in a large dataset to generate a more **compact** version of it with a specified target distribution across each attribute/dimension, while simultaneously minimizing linear correlations among them. Formerly known as `distributional_dataset_undersampling`.
+
+<img src="https://github.com/bbonik/datacarve/raw/master/assets/example.png" width="900">
 
 ## Introduction
 
@@ -177,7 +187,12 @@ What makes an instance "hard"? More datapoints, more dimensions, strongly imbala
 
 ## Examples
 
-See the [`examples/`](examples/) folder:
+Two executed walkthrough notebooks in [`notebooks/`](notebooks/):
+
+- **[Building fair, balanced evaluation sets](notebooks/balanced_evaluation_sets.ipynb)** — carves a 1,000-row eval set from the Adult census data, balanced across sex, race, income and age *simultaneously*, and shows why per-group accuracy numbers become trustworthy.
+- **[Survey quota sampling](notebooks/survey_quota_sampling.ipynb)** — selects a quota sample from a skewed respondent panel, hitting census-style age/gender/region targets exactly (fully offline, synthetic data).
+
+Runnable scripts in the [`examples/`](examples/) folder:
 
 - **`example_6d_dataset.py`** — undersamples the bundled 6-dimensional dataset (11K datapoints) down to a uniform 1K subset.
 - **`example_random_data.py`** — generates a random N-dimensional dataset (a different random distribution per dimension) and undersamples it.

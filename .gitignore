@@ -27,3 +27,6 @@ build/
 
 # Internal drafts
 BLOG_POST_DRAFT.md
+
+# Blog post working assets (local until the post is published)
+blog_assets/

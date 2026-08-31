@@ -23,7 +23,7 @@ subset = data[mask]
 
 ## The problem: your dataset is imbalanced in several ways at once
 
-Real datasets are rarely skewed along just one attribute. Take the classic Adult census dataset (48,842 rows): **two-thirds male, 85% White, 76% low-income, ages bunched between 25 and 45** — four imbalances at the same time. Train or evaluate on it as-is, and your metrics are quietly dominated by the majority groups.
+Real datasets are rarely skewed along just one attribute. Take the classic [Adult census dataset](https://archive.ics.uci.edu/dataset/2/adult) (48,842 rows): **two-thirds male, 85% White, 76% low-income, ages bunched between 25 and 45** — four imbalances at the same time. Train or evaluate on it as-is, and your metrics are quietly dominated by the majority groups.
 
 Fixing **one** attribute is easy: group by it, sample equally per group. Fixing **all of them at once** is a different kind of problem, and this is the part few people appreciate until they try:
 

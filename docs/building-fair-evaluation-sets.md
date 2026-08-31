@@ -14,7 +14,7 @@ Let me show you the problem, why the usual tools don't solve it, and a small ope
 
 ## The problem nobody's stratified sampler can handle
 
-Take the classic Adult census dataset: 48,842 rows. Two-thirds male. 85% White. 76% low-income. Age bunched between 25 and 45.
+Take the classic [Adult census dataset](https://archive.ics.uci.edu/dataset/2/adult) (also on [OpenML](https://www.openml.org/d/1590), which is what the code below loads): 48,842 rows. Two-thirds male. 85% White. 76% low-income. Age bunched between 25 and 45.
 
 Suppose you want a 1,000-row evaluation set that is *simultaneously*:
 

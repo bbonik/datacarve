@@ -73,7 +73,7 @@ Any situation where you need a **subset of fixed size whose attributes follow pr
 
 ### In the LLM era
 
-Modern LLM work is largely *data curation under a budget* — which is exactly this problem. Attributes don't need to be raw columns: task labels, topic clusters from embeddings, difficulty scores, or length buckets all work.
+Modern LLM work is largely *data curation under a budget* — which is exactly this problem. Attributes don't need to be raw columns: task labels, topic clusters from embeddings, difficulty scores, or length buckets all work ([worked notebook](notebooks/llm_eval_suite.ipynb): a 500-prompt suite carved from dolly-15k, balanced across task category × derived topic cluster × prompt length).
 
 - **Balanced benchmark & eval suites.** Carve an evaluation set that is balanced across task type × domain × difficulty × language × prompt length, so a model's headline score isn't dominated by whichever category the benchmark over-collected. Same for regression-testing suites that must stay small enough to run on every checkpoint.
 - **Fine-tuning mixtures (SFT).** Instruction datasets skew heavily by source, topic and length. Carve a compact training subset that hits an exact target mixture (e.g. 30% coding, 30% reasoning, 20% writing, 20% multilingual — with a target length distribution) instead of eyeballing sampling ratios.
@@ -240,9 +240,10 @@ What makes an instance "hard"? More datapoints, more dimensions, strongly imbala
 
 ## Examples
 
-Two executed walkthrough notebooks in [`notebooks/`](notebooks/):
+Three executed walkthrough notebooks in [`notebooks/`](notebooks/):
 
 - **[Building fair, balanced evaluation sets](notebooks/balanced_evaluation_sets.ipynb)** — carves a 1,000-row eval set from the Adult census data, balanced across sex, race, income and age *simultaneously*, and shows why per-group accuracy numbers become trustworthy.
+- **[Carving a balanced LLM evaluation suite](notebooks/llm_eval_suite.ipynb)** — carves a 500-prompt eval suite from the dolly-15k instruction dataset, balanced across task category × topic cluster (derived from the text with TF-IDF + k-means) × prompt length. No API keys or GPU needed.
 - **[Survey quota sampling](notebooks/survey_quota_sampling.ipynb)** — selects a quota sample from a skewed respondent panel, hitting census-style age/gender/region targets exactly (fully offline, synthetic data).
 
 Runnable scripts in the [`examples/`](examples/) folder:

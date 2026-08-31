@@ -14,7 +14,11 @@ Basic usage:
     >>> subset = data[mask]
 """
 
-from datacarve.core import plot_scatter_matrix, undersample_dataset
+from datacarve.core import (
+    plot_scatter_matrix,
+    prereduce_dataset,
+    undersample_dataset,
+)
 
-__all__ = ["undersample_dataset", "plot_scatter_matrix"]
+__all__ = ["undersample_dataset", "prereduce_dataset", "plot_scatter_matrix"]
 __version__ = "0.1.0"

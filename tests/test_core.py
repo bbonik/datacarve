@@ -386,3 +386,159 @@ class TestCategoricalDims:
                 target_distribution=["uniform", [1, 2, 3, 4]],
                 categorical_dims=[1], **QUIET,
             )
+
+
+# ------------------------------------------------------------ pre-reduction
+
+
+class TestPrereduceDataset:
+    from datacarve import prereduce_dataset  # noqa: PLC0415
+
+    @pytest.fixture
+    def crowded_data(self):
+        """Skewed data: most rows pile up in a few joint cells."""
+        rng = np.random.default_rng(30)
+        return rng.beta(8, 8, size=(20_000, 2))  # concentrated in the middle
+
+    def test_cap_is_respected(self, crowded_data):
+        from datacarve import prereduce_dataset
+        from datacarve.core import _minmax_scale, _quantize
+
+        cap = 50
+        mask = prereduce_dataset(
+            crowded_data, cap_per_cell=cap, bins=10, verbose=False, seed=0,
+        )
+        kept = _minmax_scale(crowded_data)[mask]
+        dq, _ = _quantize(kept, bins=10, categorical_set=set())
+        # count rows per joint cell in the reduced pool
+        _, counts = np.unique(dq, axis=0, return_counts=True)
+        assert counts.max() <= cap
+
+    def test_rare_cells_kept_in_full(self, crowded_data):
+        from datacarve import prereduce_dataset
+        from datacarve.core import _minmax_scale, _quantize
+
+        cap = 50
+        mask = prereduce_dataset(
+            crowded_data, cap_per_cell=cap, bins=10, verbose=False, seed=0,
+        )
+        dq, _ = _quantize(
+            _minmax_scale(crowded_data), bins=10, categorical_set=set()
+        )
+        cells, inverse, counts = np.unique(
+            dq, axis=0, return_inverse=True, return_counts=True
+        )
+        rare = counts[inverse] <= cap  # rows living in cells at/below cap
+        assert mask[rare].all(), "rows in rare cells must never be dropped"
+
+    def test_reduction_actually_reduces(self, crowded_data):
+        from datacarve import prereduce_dataset
+
+        mask = prereduce_dataset(
+            crowded_data, cap_per_cell=50, verbose=False, seed=0,
+        )
+        assert mask.sum() < len(crowded_data) * 0.5
+
+    def test_seed_reproducibility(self, crowded_data):
+        from datacarve import prereduce_dataset
+
+        m1 = prereduce_dataset(crowded_data, 50, verbose=False, seed=123)
+        m2 = prereduce_dataset(crowded_data, 50, verbose=False, seed=123)
+        m3 = prereduce_dataset(crowded_data, 50, verbose=False, seed=124)
+        np.testing.assert_array_equal(m1, m2)
+        assert not np.array_equal(m1, m3)
+
+    def test_bad_cap_raises(self, crowded_data):
+        from datacarve import prereduce_dataset
+
+        with pytest.raises(ValueError, match="cap_per_cell"):
+            prereduce_dataset(crowded_data, cap_per_cell=0, verbose=False)
+
+
+class TestUndersampleWithPrereduce:
+    def test_mask_refers_to_original_rows(self):
+        rng = np.random.default_rng(31)
+        data = rng.beta(8, 8, size=(30_000, 3))
+        mask = undersample_dataset(
+            data, data_to_keep=500, prereduce=100, **QUIET,
+        )
+        assert mask.shape == (30_000,)
+        assert mask.sum() == 500
+
+    def test_prereduction_does_not_degrade_quality(self):
+        """A biting cap must not make the achieved marginals worse."""
+        from datacarve import prereduce_dataset
+
+        rng = np.random.default_rng(32)
+        # 2 dims x 10 bins = 100 joint cells for 30K concentrated rows:
+        # the middle cells far exceed the cap, so reduction really bites
+        data = rng.beta(8, 8, size=(30_000, 2))
+        keep, bins, cap = 500, 10, 100
+
+        # confirm the cap actually reduces the pool
+        pre = prereduce_dataset(data, cap, bins=bins, verbose=False, seed=0)
+        assert pre.sum() < 15_000
+
+        def total_deviation(mask):
+            subset = data[mask]
+            lo, hi = data.min(axis=0), data.max(axis=0)
+            dev = 0
+            for dim in range(2):
+                scaled = (subset[:, dim] - lo[dim]) / (hi[dim] - lo[dim])
+                counts, _ = np.histogram(scaled, bins=bins, range=(0, 1))
+                dev += np.abs(counts - keep / bins).sum()
+            return dev
+
+        mask_full = undersample_dataset(
+            data, data_to_keep=keep, bins=bins, **QUIET,
+        )
+        mask_pre = undersample_dataset(
+            data, data_to_keep=keep, bins=bins, prereduce=cap, **QUIET,
+        )
+        assert mask_pre.sum() == keep
+        # rows within a joint cell are interchangeable, so the reduced
+        # pool supports (near-)identical marginal quality
+        assert total_deviation(mask_pre) <= total_deviation(mask_full) + 4
+
+    def test_auto_is_noop_for_small_data(self, uniform_data):
+        mask_auto = undersample_dataset(
+            uniform_data, data_to_keep=200, prereduce="auto", **QUIET,
+        )
+        mask_none = undersample_dataset(
+            uniform_data, data_to_keep=200, prereduce=None, **QUIET,
+        )
+        np.testing.assert_array_equal(mask_auto, mask_none)
+
+    def test_prereduce_with_categoricals(self):
+        rng = np.random.default_rng(33)
+        n = 30_000
+        data = np.column_stack([
+            rng.beta(8, 8, n),
+            rng.choice([0.0, 1.0, 2.0], n, p=[0.8, 0.15, 0.05]),
+        ])
+        mask = undersample_dataset(
+            data, data_to_keep=300, categorical_dims=[1],
+            prereduce=300, **QUIET,
+        )
+        subset = data[mask]
+        counts = [np.sum(subset[:, 1] == c) for c in (0.0, 1.0, 2.0)]
+        assert np.all(np.abs(np.array(counts) - 100) <= 2), counts
+
+    def test_too_aggressive_cap_raises(self):
+        rng = np.random.default_rng(34)
+        # all rows in one joint cell -> cap 1 leaves a single row
+        data = np.full((1000, 2), 0.5) + rng.normal(0, 1e-9, (1000, 2))
+        with pytest.raises(ValueError, match="[Pp]re-reduction"):
+            undersample_dataset(
+                data, data_to_keep=100, prereduce=1, **QUIET,
+            )
+
+    def test_invalid_prereduce_value_raises(self, uniform_data):
+        with pytest.raises(ValueError, match="prereduce"):
+            undersample_dataset(
+                uniform_data, data_to_keep=100, prereduce="always", **QUIET,
+            )
+        with pytest.raises(ValueError, match="prereduce"):
+            undersample_dataset(
+                uniform_data, data_to_keep=100, prereduce=True, **QUIET,
+            )

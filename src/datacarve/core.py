@@ -29,7 +29,7 @@ import numpy as np
 from ortools.linear_solver import pywraplp
 from scipy import stats
 
-__all__ = ["undersample_dataset", "plot_scatter_matrix"]
+__all__ = ["undersample_dataset", "prereduce_dataset", "plot_scatter_matrix"]
 
 
 TargetDistribution = Literal["uniform", "gaussian", "weibull", "triangular"]
@@ -175,6 +175,224 @@ def _pairwise_correlation_cost(
     return (d.sum(axis=1) ** 2 - (d**2).sum(axis=1)) / 2.0
 
 
+def _minmax_scale(data: np.ndarray) -> np.ndarray:
+    """Min-max scale each column to [0, 1] (constant columns map to 0)."""
+    data_min = data.min(axis=0)
+    data_max = data.max(axis=0)
+    span = data_max - data_min
+    span[span == 0] = 1.0  # constant features: avoid division by zero
+    return (data - data_min) / span
+
+
+def _quantize(
+    data: np.ndarray, bins: int, categorical_set: set[int]
+) -> tuple[np.ndarray, list[int]]:
+    """
+    Quantize each column into bin indices.
+
+    Numeric columns (expected in [0, 1]) get ``bins`` equal-width bins;
+    categorical columns get one bin per unique value.
+
+    Returns
+    -------
+    (data_quantized, n_bins_per_dim)
+        Integer bin index per (row, column), and the number of bins used
+        by each column.
+    """
+    n_observations, n_dimensions = data.shape
+    data_quantized = np.zeros((n_observations, n_dimensions), dtype=int)
+    n_bins_per_dim: list[int] = []
+    edges = np.linspace(0, 1, bins + 1)
+
+    for m in range(n_dimensions):
+        if m in categorical_set:
+            _, codes = np.unique(data[:, m], return_inverse=True)
+            data_quantized[:, m] = codes
+            n_bins_per_dim.append(int(codes.max()) + 1)
+        else:
+            # digitize returns indices in [1, bins+1]; shift to [0, bins-1]
+            q = np.digitize(data[:, m], bins=edges) - 1
+            q[q == bins] = bins - 1  # datapoints exactly at 1.0
+            data_quantized[:, m] = q
+            n_bins_per_dim.append(bins)
+
+    return data_quantized, n_bins_per_dim
+
+
+def _cell_ids(
+    data_quantized: np.ndarray, n_bins_per_dim: Sequence[int]
+) -> np.ndarray:
+    """Joint quantization-cell id per row (mixed-radix over the columns)."""
+    total_cells = 1
+    for b in n_bins_per_dim:
+        total_cells *= int(b)
+    if total_cells < 2**62:
+        radix = np.ones(len(n_bins_per_dim), dtype=np.int64)
+        acc = 1
+        for m in range(len(n_bins_per_dim) - 1, -1, -1):
+            radix[m] = acc
+            acc *= int(n_bins_per_dim[m])
+        return (data_quantized.astype(np.int64) * radix).sum(axis=1)
+    # gigantic bin products: fall back to row-wise unique
+    return np.unique(data_quantized, axis=0, return_inverse=True)[1]
+
+
+def _adaptive_cap(cell_counts: np.ndarray, pool_target: int) -> int:
+    """
+    Largest per-cell cap whose resulting pool stays within pool_target.
+
+    Uses the monotone function f(C) = sum(min(count, C)); returns 1 if
+    even a cap of 1 exceeds the target (one row per occupied cell).
+    """
+    counts_sorted = np.sort(cell_counts)
+    prefix = np.concatenate([[0], np.cumsum(counts_sorted)])
+
+    def pool_size(cap: int) -> int:
+        idx = np.searchsorted(counts_sorted, cap, side="right")
+        return int(prefix[idx] + cap * (len(counts_sorted) - idx))
+
+    lo, hi = 1, int(counts_sorted[-1])
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if pool_size(mid) <= pool_target:
+            lo = mid
+        else:
+            hi = mid - 1
+    return lo
+
+
+def _cap_cells(
+    cell_ids: np.ndarray,
+    cap_per_cell: int,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """
+    Cap the number of rows per joint quantization cell.
+
+    Rows sharing the same joint bin signature across all columns are
+    interchangeable with respect to every histogram constraint, so cells
+    with more than ``cap_per_cell`` rows are randomly downsampled to the
+    cap, while all rows of smaller (rare) cells are kept.
+
+    Returns
+    -------
+    numpy.ndarray of bool, shape (N,)
+        True for rows to keep.
+    """
+    n = cell_ids.shape[0]
+
+    # group rows by cell, in random order within each cell
+    perm = rng.permutation(n)
+    order = perm[np.argsort(cell_ids[perm], kind="stable")]
+    sorted_cells = cell_ids[order]
+
+    # rank of each row within its cell (0-based, random by construction)
+    is_start = np.ones(n, dtype=bool)
+    is_start[1:] = sorted_cells[1:] != sorted_cells[:-1]
+    group_starts = np.flatnonzero(is_start)
+    group_sizes = np.diff(np.append(group_starts, n))
+    ranks = np.arange(n) - np.repeat(group_starts, group_sizes)
+
+    mask = np.zeros(n, dtype=bool)
+    mask[order[ranks < cap_per_cell]] = True
+    return mask
+
+
+def prereduce_dataset(
+    data: np.ndarray,
+    cap_per_cell: int,
+    bins: int = 10,
+    categorical_dims: Sequence[int] | None = None,
+    data_scaling: Literal["minmax"] | None = "minmax",
+    seed: int | None = None,
+    verbose: bool = True,
+) -> np.ndarray:
+    """
+    Pre-reduce a very large dataset so that ``undersample_dataset`` can
+    handle it, without destroying rare groups.
+
+    Rows are grouped by their joint quantization cell (the combination of
+    bin indices across all columns). Cells with at most ``cap_per_cell``
+    rows are kept in full — rare groups are never touched — while
+    overcrowded cells are randomly downsampled to the cap. Rows within a
+    cell are interchangeable with respect to every histogram constraint,
+    so this loses (almost) nothing that the MILP could have used.
+
+    This is preferable to naive random subsampling, which preserves the
+    skew you are trying to fix and can wipe out rare categories entirely.
+
+    Parameters
+    ----------
+    data : numpy.ndarray of shape (N, M)
+        Dataset of N observations and M dimensions.
+    cap_per_cell : int
+        Maximum number of rows to keep per joint quantization cell. A
+        safe choice is your intended ``data_to_keep``: no solution can
+        ever use more rows than that from a single cell.
+    bins : int
+        Number of quantization bins per numeric dimension. Should match
+        the ``bins`` you will pass to ``undersample_dataset``. With many
+        dimensions or fine bins the joint cells become sparse and the
+        reduction shrinks; a coarser value recovers it.
+    categorical_dims : sequence of int, optional
+        Column indices to treat as categorical (one cell slot per unique
+        value). Should match the ``undersample_dataset`` call.
+    data_scaling : {'minmax', None}
+        Scaling applied before quantization (same as
+        ``undersample_dataset``).
+    seed : int, optional
+        Seed for the random downsampling of overcrowded cells.
+    verbose : bool
+        Whether to print the reduction summary.
+
+    Returns
+    -------
+    numpy.ndarray of bool, shape (N,)
+        True for rows kept in the reduced pool.
+
+    Examples
+    --------
+    >>> pre_mask = prereduce_dataset(huge, cap_per_cell=1000)
+    >>> sub_mask = undersample_dataset(huge[pre_mask], data_to_keep=1000)
+    >>> final = np.zeros(len(huge), dtype=bool)
+    >>> final[np.flatnonzero(pre_mask)[sub_mask]] = True
+
+    Or simply pass ``prereduce=`` to ``undersample_dataset``, which runs
+    both stages and returns a single mask over the original rows.
+    """
+    data = np.asarray(data, dtype=float)
+    if data.ndim != 2:
+        raise ValueError(f"data must be a 2D array [N, M], got shape {data.shape}")
+    if cap_per_cell < 1:
+        raise ValueError(f"cap_per_cell must be >= 1, got {cap_per_cell}")
+
+    n_dimensions = data.shape[1]
+    categorical_set = set(int(c) for c in categorical_dims or [])
+    if categorical_set and not all(
+        0 <= c < n_dimensions for c in categorical_set
+    ):
+        raise ValueError(
+            f"categorical_dims entries must be column indices in "
+            f"[0, {n_dimensions - 1}], got {sorted(categorical_set)}."
+        )
+
+    if data_scaling == "minmax":
+        data = _minmax_scale(data)
+
+    data_quantized, n_bins_per_dim = _quantize(data, bins, categorical_set)
+    mask = _cap_cells(
+        _cell_ids(data_quantized, n_bins_per_dim), cap_per_cell,
+        np.random.default_rng(seed),
+    )
+
+    if verbose:
+        print(
+            f"Pre-reduction: {len(mask):,} -> {int(mask.sum()):,} rows "
+            f"(cap {cap_per_cell}/cell)"
+        )
+    return mask
+
+
 def undersample_dataset(
     data: np.ndarray,
     data_to_keep: int = 1000,
@@ -187,6 +405,7 @@ def undersample_dataset(
     bins: int = 10,
     categorical_dims: Sequence[int] | None = None,
     lamda: float = 0.5,
+    prereduce: int | Literal["auto"] | None = None,
     solver: Literal["CBC", "SCIP", "SAT"] = "CBC",
     max_solver_time_sec: float = 10.0,
     verbose: bool = True,
@@ -237,6 +456,25 @@ def undersample_dataset(
         Balance between the two objectives: distribution matching vs
         correlation minimization. ``lamda=0`` uses only distributional
         constraints; larger values weight correlation minimization more.
+    prereduce : int, 'auto', or None
+        Pre-reduce very large datasets before building the MILP, using
+        joint-cell capping (see ``prereduce_dataset``): rows are grouped
+        by their joint bin signature, rare cells are kept in full, and
+        overcrowded cells are randomly downsampled to a cap. The returned
+        mask always refers to the *original* rows.
+
+        * ``None`` (default) — no pre-reduction.
+        * an int — always pre-reduce, capping each joint cell at that
+          many rows.
+        * ``'auto'`` — pre-reduce only when the dataset exceeds 200,000
+          rows, choosing the largest per-cell cap whose reduced pool
+          stays within max(100,000, 5 * data_to_keep) rows — large
+          enough to leave the solver real freedom, small enough to solve
+          in seconds.
+
+        The random downsampling uses a fixed internal seed, so results
+        are reproducible; use ``prereduce_dataset`` directly for control
+        over the seed or the grouping granularity.
     solver : {'CBC', 'SCIP', 'SAT'}
         MILP solver backend (all free and bundled with OR-Tools, no extra
         installation needed). Guidance on choosing:
@@ -329,18 +567,22 @@ def undersample_dataset(
             f"[0, {n_dimensions - 1}], got {sorted(categorical_set)}."
         )
 
+    if prereduce is not None and prereduce != "auto":
+        if isinstance(prereduce, bool) or not isinstance(prereduce, int):
+            raise ValueError(
+                f"prereduce must be None, 'auto', or an int >= 1, "
+                f"got {prereduce!r}."
+            )
+        if prereduce < 1:
+            raise ValueError(f"prereduce must be >= 1, got {prereduce}")
+
     if scatterplot_matrix == "auto":
         scatterplot_matrix = n_dimensions <= 10
 
     # --------------------------------------------------------- data scaling
 
     if data_scaling == "minmax":
-        # min-max normalization per feature -> [0, 1]
-        data_min = data.min(axis=0)
-        data_max = data.max(axis=0)
-        span = data_max - data_min
-        span[span == 0] = 1.0  # constant features: avoid division by zero
-        data = (data - data_min) / span
+        data = _minmax_scale(data)
 
     # ----------------------------------------------- quantize data into bins
 
@@ -349,21 +591,43 @@ def undersample_dataset(
 
     # numeric dimensions: `bins` equal-width bins over [0, 1];
     # categorical dimensions: one bin per unique value
-    data_quantized = np.zeros((n_observations, n_dimensions), dtype=int)
-    n_bins_per_dim: list[int] = []
-    edges = np.linspace(0, 1, bins + 1)
+    data_quantized, n_bins_per_dim = _quantize(data, bins, categorical_set)
 
-    for m in range(n_dimensions):
-        if m in categorical_set:
-            _, codes = np.unique(data[:, m], return_inverse=True)
-            data_quantized[:, m] = codes
-            n_bins_per_dim.append(int(codes.max()) + 1)
+    # ------------------------------------------ optional pre-reduction stage
+
+    original_indices = None  # set when pre-reduction is applied
+
+    apply_prereduce = prereduce is not None and (
+        prereduce != "auto" or n_observations > 200_000
+    )
+
+    if apply_prereduce:
+        ids = _cell_ids(data_quantized, n_bins_per_dim)
+        if prereduce == "auto":
+            # pick the largest cap whose pool the solver handles comfortably
+            _, cell_counts = np.unique(ids, return_counts=True)
+            pool_target = max(100_000, 5 * data_to_keep)
+            cap = _adaptive_cap(cell_counts, pool_target)
         else:
-            # digitize returns indices in [1, bins+1]; shift to [0, bins-1]
-            q = np.digitize(data[:, m], bins=edges) - 1
-            q[q == bins] = bins - 1  # datapoints exactly at 1.0
-            data_quantized[:, m] = q
-            n_bins_per_dim.append(bins)
+            cap = prereduce
+        keep = _cap_cells(ids, cap, np.random.default_rng(0))
+        n_kept = int(keep.sum())
+        if n_kept < data_to_keep:
+            raise ValueError(
+                f"Pre-reduction with cap {cap}/cell leaves only {n_kept} "
+                f"rows, fewer than data_to_keep={data_to_keep}. Increase "
+                f"the prereduce cap."
+            )
+        if verbose:
+            print(
+                f"Pre-reduction: {n_observations:,} -> {n_kept:,} rows "
+                f"(cap {cap}/cell)"
+            )
+        n_original = n_observations
+        original_indices = np.flatnonzero(keep)
+        data = data[keep]
+        data_quantized = data_quantized[keep]
+        n_observations = n_kept
 
     # ------------------------------------------ target distribution per bin
 
@@ -534,6 +798,12 @@ def undersample_dataset(
             )
     elif verbose:
         print("No solution was found")
+
+    # map the selection back to the original (pre-reduction) rows
+    if original_indices is not None:
+        full_mask = np.zeros(n_original, dtype=bool)
+        full_mask[original_indices[indx_selected]] = True
+        return full_mask
 
     return indx_selected
 

@@ -24,3 +24,6 @@ build/
 
 # Jupyter
 .ipynb_checkpoints/
+
+# Internal drafts
+BLOG_POST_DRAFT.md

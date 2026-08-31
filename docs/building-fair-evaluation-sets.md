@@ -1,10 +1,12 @@
 # Building fair evaluation sets is a combinatorial problem. Here's how to solve it exactly.
 
-Overall accuracy is a weighted average, and the weights are your evaluation set's demographics. Suppose you evaluate a model on data that is 90% group A and 10% group B: a model scoring 95% on A and 60% on B still reports a comfortable **91.5% overall**. The headline number isn't lying, exactly — it's just answering a question you didn't mean to ask: "how well does this work *for the mixture of people who happened to be in my eval set*?" The failure for group B is sitting in plain sight, diluted into a rounding error.
+Overall accuracy is a weighted average — and the weights are whatever your evaluation set happens to contain. If your eval set is 90% group A and 10% group B, a model scoring 95% on A but only **60% on B** still reports a comfortable **91.5% overall**:
 
-It gets worse when you try to check per-group numbers on that same skewed set: group B's accuracy rests on a handful of rows, so it swings wildly from a few lucky or unlucky predictions — you can't tell a real gap from noise. This is not a hypothetical: commercial face analysis systems shipped with error rates an order of magnitude higher for dark-skinned women than for light-skinned men, and the gap went unnoticed for years partly because the benchmarks everyone evaluated on were overwhelmingly light-skinned and male. The model *and* the measuring instrument shared the same blind spot.
+![How a skewed eval set dilutes a per-group failure](https://github.com/bbonik/datacarve/raw/master/assets/skewed_eval_dilution.png)
 
-The fix sounds simple: evaluate on a set where every group has equal statistical footing. But actually *building* one — balanced across several attributes at the same time — turns out to be a genuinely hard combinatorial problem that most teams solve with duct tape.
+The failure is sitting in plain sight, diluted into a rounding error. And checking group B's number on the same skewed set doesn't rescue you: it rests on a handful of rows, so it's mostly noise. This is not hypothetical — commercial face-analysis systems shipped with error rates roughly 10× higher for dark-skinned women than for light-skinned men, and the gap went unnoticed for years because the benchmarks were overwhelmingly light-skinned and male. The model and the measuring instrument shared the same blind spot.
+
+The fix is an evaluation set where every group has **equal statistical footing**. Building one — balanced across several attributes at the same time — turns out to be a genuinely hard combinatorial problem that most teams solve with duct tape.
 
 Let me show you the problem, why the usual tools don't solve it, and a small open-source package that solves it exactly.
 

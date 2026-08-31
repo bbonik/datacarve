@@ -16,41 +16,74 @@ mask = undersample_dataset(data, data_to_keep=1000)  # balanced across ALL dimen
 subset = data[mask]
 ```
 
-`datacarve` is a Mixed Integer Linear Programming (**MILP**) Python tool for **undersampling a dataset** while enforcing a particular **target distribution** across multiple dimensions. It leverages the (possible) **redundancies** in a large dataset to generate a more **compact** version of it with a specified target distribution across each attribute/dimension, while simultaneously minimizing linear correlations among them. Formerly known as `distributional_dataset_undersampling`.
+`datacarve` selects the **provably optimal subset** of a dataset whose attributes jointly follow the distributions you specify — balanced across gender *and* age *and* race *and* label, all at once. Typical uses: **fair evaluation sets** for bias audits and Responsible AI compliance, **LLM data mixtures** (eval suites, SFT subsets, red-teaming pools), quota samples, and matched cohorts. Under the hood it is a Mixed Integer Linear Programming (**MILP**) formulation that exploits the redundancies of a large dataset to carve a compact, distribution-shaped version of it, while also minimizing cross-attribute correlations. Formerly known as `distributional_dataset_undersampling`.
 
 <img src="https://github.com/bbonik/datacarve/raw/master/assets/example.png" width="900">
 
-## Introduction
+## The problem: your dataset is imbalanced in several ways at once
 
-Datasets can be highly unbalanced: some values/categories may be over-represented, while others may be under-represented. Such imbalance may have a negative impact on many machine learning techniques: the learning algorithm may be very accurate for the over-represented classes, while exhibiting a very high error for the under-represented ones. **Oversampling** (replicating the under-represented classes) or **undersampling** (reducing the over-represented classes) are two typical approaches to address this problem.
+Real datasets are rarely skewed along just one attribute. Take the classic Adult census dataset (48,842 rows): **two-thirds male, 85% White, 76% low-income, ages bunched between 25 and 45** — four imbalances at the same time. Train or evaluate on it as-is, and your metrics are quietly dominated by the majority groups.
 
-**Balancing a dataset across only 1 attribute is straightforward.** For example, building a face gender classifier (M/F) from an imbalanced dataset should be easy: just undersample the majority class or oversample the minority class.
+Fixing **one** attribute is easy: group by it, sample equally per group. Fixing **all of them at once** is a different kind of problem, and this is the part few people appreciate until they try:
 
-**Things get really tricky if more than one attribute is involved.** For example, assume that we would like to build the same face gender classifier (M/F), but also achieve a balanced performance across different ages, races and facial expressions. In this case, we have to balance the dataset across 4 attributes (gender, age, race, expressions). Even more, some of these attributes are not categorical, for example age, requiring balancing across different age ranges.
+- **Every row you keep counts toward every histogram simultaneously.** A row that improves your gender balance may worsen your age balance. There is no "safe" row to drop.
+- **Stratifying on the combination of attributes explodes.** 2 sexes × 5 races × 2 income classes × 10 age bins = 200 strata — most of which are nearly or completely empty in the original data. You cannot sample equally from empty strata.
+- **Greedy selection has no guarantee.** Picking whichever row locally improves balance routinely paints itself into corners where every remaining candidate makes some attribute worse.
 
-**Undersampling across multiple dimensions is a difficult combinatorial problem.** A datapoint may be majority for attribute A, but minority for attribute B. In the previous example, assume that Male training examples are over-represented, but age ranging from 10-20 years is under-represented. Should you delete a Male datapoint of age 10-20? The answer is not straightforward. It is very difficult to know which datapoints to drop in order to achieve a target distribution *across all attributes*.
+Selecting the best possible subset under joint distributional constraints is a **combinatorial optimization problem**. Treating it like one — instead of approximating with heuristics — is the whole point of this package.
 
-## Description
+## How datacarve solves it
 
-This repository implements an **undersampling MILP-based dataset shaping** technique. The optimization leverages the (possible) *redundancies* in a large dataset to generate a more *compact* version of the original dataset with a specified target distribution across each attribute/dimension, while simultaneously minimizing linear correlations among them.
+`datacarve` formulates the selection as a **Mixed Integer Linear Program (MILP)**: one binary keep/drop decision per row, constraints that tie the selected counts in every (attribute, bin) cell to your target distribution, and an objective that minimizes total deviation from the targets while also suppressing cross-attribute correlations.
 
-In summary, given a large dataset and a required target distribution, the MILP optimization creates a compact subset of the original dataset by finding the optimal combination of datapoints that:
+```mermaid
+flowchart LR
+    A["Large skewed dataset<br/>(N rows, M attributes)"] --> Q["Quantize each attribute<br/>into bins / categories"]
+    T["Target distribution<br/>per attribute<br/>(uniform, gaussian, custom)"] --> S
+    K["Subset size K"] --> S
+    Q --> S{"MILP solver<br/>one binary variable per row:<br/>keep or drop"}
+    S --> O["Optimal subset of<br/>K real rows"]
+    O --> R["All M marginals match<br/>their targets jointly<br/>+ minimal cross-correlations"]
+```
 
-1. **Enforces the target distribution across all dimensions.**
-2. **Minimizes linear correlations between dimensions.**
+The solver either **proves it found the optimal subset**, or — given a time budget — returns the best subset found with a quality bound. Three properties fall out of this that heuristics cannot offer:
 
-As such, this technique can be seen as *complementary to dimensionality reduction*: instead of reducing feature dimensions while maintaining the number of observations, we reduce the number of observations while imposing distributional constraints on the dimensions.
+1. **Exactness.** The selected counts per group are guaranteed, not approximate: you can state "200 rows per race, 500 per sex" in a datasheet and mean it.
+2. **Jointness.** All attributes are satisfied *simultaneously* — numeric ones shaped to any distribution (uniform, gaussian, custom histogram), categorical ones to exact per-category counts.
+3. **Real data only.** The subset is made of your actual rows. Nothing is synthesized, duplicated, or reweighted.
 
-The figure above depicts covariance scatter plots for a 6-dimensional dataset with 11K datapoints. The distribution for each dimension is given by a histogram, while the Pearson correlation rho between dimensions and corresponding p-value (in parentheses) are mentioned for each scatter plot. Dimension 5 (D5) is a linear combination of D0 and D3. Three subsets of 1K datapoints are generated with this data shaping technique, so as to have Uniform, Gaussian and Triangular distributions, while minimizing correlations between different dimensions.
+The technique is *complementary to dimensionality reduction*: instead of reducing feature dimensions while keeping all observations, it reduces observations while imposing distributional constraints on the dimensions.
+
+The figure above shows it in action on a 6-dimensional dataset (11K datapoints), where dimension D5 is a linear combination of D0 and D3. Three 1K subsets are carved with Uniform, Gaussian and Triangular targets: every histogram takes the target shape, and the D0–D5 correlation visible in the original is broken in the subsets.
+
+## Fairness and Responsible AI
+
+This is the use case the package was built around, and it has only become more urgent since the original papers (ICIP 2016 / IEEE TMM 2017). Today, model cards, datasheets, bias audits, and regulations such as the **EU AI Act** all expect evidence that systems were evaluated on **representative, balanced data across sensitive attributes** — and "we randomly sampled and hoped" does not qualify.
+
+`datacarve` turns that requirement into a one-liner with a provable result:
+
+- **Balanced evaluation sets.** In a random 1,000-row sample of Adult, the smallest racial group gets ~8 rows — its accuracy estimate is statistical noise that swings on a couple of lucky predictions. A carved set gives *every* group the same 200-row evidence base, making per-group metrics comparable and equally trustworthy. See the [worked notebook](notebooks/balanced_evaluation_sets.ipynb): sex 500/500, race 5×200, income 500/500, age flat — simultaneously, in seconds.
+- **Auditable by construction.** Because the constraints are explicit and the solver's result status is reported, the composition of your eval set is a *documented guarantee*, not a post-hoc observation — exactly what a datasheet or compliance review wants to see.
+- **Realistic, not just uniform, targets.** Fairness rarely means "make everything equal". Per-attribute targets let you balance sensitive attributes exactly while keeping, say, a realistic 3:1 label ratio: `target_distribution=["uniform", "uniform", [3, 1]]`.
 
 ## Applications
 
-Any situation where you need a **subset of fixed size whose attributes follow prescribed distributions, jointly across several attributes**, is a candidate for this technique:
+Any situation where you need a **subset of fixed size whose attributes follow prescribed distributions, jointly across several attributes**, is a candidate.
 
-- **Fair & balanced ML evaluation sets.** Build test/benchmark sets that are balanced across multiple sensitive or contextual attributes at once (e.g., gender × age × skin tone × pose for face analysis), so that reported accuracy is not dominated by over-represented groups. The same applies to curating balanced fine-tuning or validation subsets.
-- **Dataset debiasing / data-centric AI.** Reshape a skewed training set toward a target distribution instead of collecting new data, leveraging redundancy that is already present in the dataset.
+### In the LLM era
+
+Modern LLM work is largely *data curation under a budget* — which is exactly this problem. Attributes don't need to be raw columns: task labels, topic clusters from embeddings, difficulty scores, or length buckets all work.
+
+- **Balanced benchmark & eval suites.** Carve an evaluation set that is balanced across task type × domain × difficulty × language × prompt length, so a model's headline score isn't dominated by whichever category the benchmark over-collected. Same for regression-testing suites that must stay small enough to run on every checkpoint.
+- **Fine-tuning mixtures (SFT).** Instruction datasets skew heavily by source, topic and length. Carve a compact training subset that hits an exact target mixture (e.g. 30% coding, 30% reasoning, 20% writing, 20% multilingual — with a target length distribution) instead of eyeballing sampling ratios.
+- **Safety & red-teaming sets.** Balance adversarial prompts across harm categories × attack styles × targeted demographics, so safety metrics cover the space instead of over-testing the most common attack type.
+- **Human evaluation & preference data.** Annotator time is the scarcest resource in RLHF pipelines; carve the candidate pool so every scenario type gets equal annotation coverage.
+
+### Classical ML and beyond
+
+- **Dataset debiasing / data-centric AI.** Reshape a skewed training set toward a target distribution instead of collecting new data, leveraging redundancy already present in the dataset.
 - **Causal inference & epidemiology.** Select a control cohort whose covariate distributions match a treatment group (or any reference population). This generalizes matching approaches such as cardinality matching: the target can be *any* distribution, not just another group's.
-- **Survey statistics & market research.** Quota sampling and panel calibration: pick respondents so that the sample matches census demographics across several attributes simultaneously.
+- **Survey statistics & market research.** Quota sampling and panel calibration: pick respondents so that the sample matches census demographics across several attributes simultaneously ([worked notebook](notebooks/survey_quota_sampling.ipynb)).
 - **A/B testing.** Assign experiment groups that are balanced across multiple covariates, rather than relying on randomization alone for small samples.
 - **Drug discovery / cheminformatics.** Select compound libraries with desired property distributions (molecular weight, logP, solubility, ...) while minimizing redundancy between correlated properties.
 - **Simulation & testing.** Choose a representative, affordable subset of test scenarios (e.g., driving scenarios spanning weather × traffic × speed distributions) when running all of them is too expensive.

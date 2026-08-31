@@ -8,6 +8,8 @@ The failure is sitting in plain sight, diluted into a rounding error. And checki
 
 The fix is an evaluation set where every group has **equal statistical footing**. Building one — balanced across several attributes at the same time — turns out to be a genuinely hard combinatorial problem that most teams solve with duct tape.
 
+If you're thinking *"just macro-average — equal weight per group, no new dataset needed"*: that fixes the arithmetic, not the evidence. **Evaluation is rarely free** — annotation budgets, human evals, judge-model costs, runs on every checkpoint — so in practice you choose *which* K rows to evaluate, and no weighting scheme can create evidence you never collected. Weighting also gets murky with several attributes at once (their effects confound each other), with continuous attributes like age, and whenever the deliverable is an actual dataset — a benchmark release, a human-eval panel, a datasheet. More on this in "Why not just...?" below.
+
 Let me show you the problem, why the usual tools don't solve it, and a small open-source package that solves it exactly.
 
 ## The problem nobody's stratified sampler can handle
@@ -49,7 +51,7 @@ The formulation is almost embarrassingly clean. For each row *k*, introduce a bi
 
 Minimize deviation from all target histograms jointly, over all possible 1,000-row subsets, exactly. A mixed integer linear programming (MILP) solver either proves it found the optimal subset or, given a time budget, returns the best one found with a quality bound.
 
-I published this formulation back in 2016 ([ICIP paper](http://vintage.winklerbros.net/Publications/icip2016a.pdf)); we used it to curate balanced face datasets. The fairness conversation has since made the problem mainstream, so I've modernized the implementation and packaged it: [**datacarve**](https://github.com/bbonik/datacarve).
+I published this formulation back in 2016 ([ICIP paper](http://vintage.winklerbros.net/Publications/icip2016a.pdf)); we used it to curate balanced face datasets. The fairness conversation has since made the problem mainstream, so I've modernized the implementation and packaged it: [**datacarve**](https://github.com/bbonik/datacarve). The name means what it does: to *carve* is to **undersample** — select a subset of your real rows and drop the rest, so that what remains has exactly the shape you asked for.
 
 ```bash
 pip install datacarve
@@ -87,7 +89,7 @@ On my laptop this solves in under three seconds, over 48,842 binary decisions. T
 | Income | 76% / 24% | **500 / 500** |
 | Age | bunched 25–45 | **~100 per decade bin** |
 
-Every row is a real census record — no synthetic points, no reweighting. And the practical payoff shows up immediately in evaluation: in a *random* 1,000-row eval set, the smallest racial groups get about 8 rows each, so their accuracy estimates swing by whole percentage points on a couple of lucky predictions. In the carved set, every group's accuracy rests on the same 200-row evidence base.
+Carving is pure undersampling: every row in the subset is a real census record — nothing synthesized, duplicated, or reweighted. And the practical payoff shows up immediately in evaluation: in a *random* 1,000-row eval set, the smallest racial groups get about 8 rows each, so their accuracy estimates swing by whole percentage points on a couple of lucky predictions. In the carved set, every group's accuracy rests on the same 200-row evidence base.
 
 **Why evaluation specifically, and not just training on a balanced subset?** Because training and evaluation have opposite economics. In training, more data generally helps — models tolerate imbalance, loss weighting exists, and throwing rows away usually costs accuracy. Evaluation is a *measurement instrument*: it's small by necessity (annotation budgets, running on every checkpoint), which means per-group sample sizes collapse fast, and a skewed instrument gives biased readings no matter how good the model is. Balancing the training set is a tactic you may or may not adopt; balancing the evaluation set is a prerequisite — you cannot even *detect* a per-group performance gap without equal statistical evidence per group. Shrinking an eval set to achieve that costs you nothing but redundancy.
 
@@ -103,6 +105,7 @@ The solver hit that 3:1 ratio at exactly 750/250.
 
 The alternatives all solve a neighboring problem, not this one:
 
+- **Macro-averaging** (equal weight per group, computed on the skewed set) is the most tempting shortcut, and for a single categorical attribute on a fully labeled pool it's legitimately fine. But it fixes the *weighting*, not the *evidence*: under an evaluation budget of K rows, your smallest groups still contribute a handful of noisy rows — and equal weighting *amplifies* that noise rather than hiding it. It also doesn't compose across attributes (the cross-product cells are empty or confounded with each other), and it yields a metric definition, not a shippable dataset. In one line: **reweighting changes how you average the evidence; carving changes which evidence you collect.**
 - **Stratified sampling** balances one attribute; the multi-attribute cross-product explodes into empty strata.
 - **Class balancing tools** (undersampling/SMOTE in `imbalanced-learn`) handle a single label, and SMOTE fabricates synthetic points — fine for training, unacceptable for evaluation data.
 - **Reweighting/calibration** keeps the dataset large and hands you weights; human evals, benchmark releases, and most ML pipelines need an actual subset.

@@ -21,4 +21,4 @@ from datacarve.core import (
 )
 
 __all__ = ["undersample_dataset", "prereduce_dataset", "plot_scatter_matrix"]
-__version__ = "0.1.0"
+__version__ = "0.2.0"

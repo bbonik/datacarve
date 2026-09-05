@@ -171,6 +171,7 @@ Useful options:
 | `categorical_dims` | `None` | Column indices to treat as categorical (one bin per unique value). |
 | `lamda` | `0.5` | Balance between distribution matching (`0`) and correlation minimization (`>0`). |
 | `prereduce` | `None` | Pre-reduce huge datasets before solving: `'auto'`, or an int cap per joint cell. See [Very large datasets](#very-large-datasets). |
+| `randomize` | `None` | Seed for hybrid randomized carving: same balance, random row choice within cells. See [Randomized carving](#randomized-carving). |
 | `solver` | `'CBC'` | MILP solver backend: `'CBC'`, `'SCIP'`, or `'SAT'`. See [Choosing a solver](#choosing-a-solver). |
 | `max_solver_time_sec` | `10.0` | Time budget for the MILP solver. Increase for large datasets. |
 | `verbose` | `True` | Print progress and solver statistics. |
@@ -220,6 +221,16 @@ Measured on a laptop: a 10-million-row dataset is carved into a perfectly balanc
 
 The standalone `prereduce_dataset()` function exposes the same stage with control over the cap, grouping granularity, and random seed.
 
+## Randomized carving
+
+The MILP's optimum is degenerate: many subsets satisfy the constraints equally well, and the solver picks one by arbitrary tie-breaking. On attributes you *didn't* constrain, that arbitrary choice can wander (we [measured it](notebooks/carving_vs_cube_method.ipynb)). The `randomize` parameter fixes this with a hybrid strategy:
+
+```python
+mask = undersample_dataset(data, data_to_keep=1000, randomize=42)  # any seed
+```
+
+The solver still decides *how many* rows come from each joint quantization cell; *which* rows fill each quota is then drawn at random within the cell. Rows in a cell are interchangeable for every histogram constraint, so **all marginals are identical to the deterministic solution** — but the selection is now random *conditional on the constrained attributes*, neutralizing tie-breaking bias on everything else (measured or unmeasured). Use several seeds to draw multiple equivalent subsets and gauge the spread of downstream metrics. Recommended whenever you report per-group metrics from a carved eval set. See the [worked notebook](notebooks/hybrid_randomized_carving.ipynb).
+
 ## Choosing a solver
 
 All three backends are free, open source, and bundled with OR-Tools — no extra installation needed. They solve the exact same model; they differ in *how* they search, which matters once problems get hard.
@@ -247,6 +258,8 @@ Three executed walkthrough notebooks in [`notebooks/`](notebooks/):
 - **[Building fair, balanced evaluation sets](notebooks/balanced_evaluation_sets.ipynb)** — carves a 1,000-row eval set from the Adult census data, balanced across sex, race, income and age *simultaneously*, and shows why per-group accuracy numbers become trustworthy.
 - **[Carving a balanced LLM evaluation suite](notebooks/llm_eval_suite.ipynb)** — carves a 500-prompt eval suite from the dolly-15k instruction dataset, balanced across task category × topic cluster (derived from the text with TF-IDF + k-means) × prompt length. No API keys or GPU needed.
 - **[Survey quota sampling](notebooks/survey_quota_sampling.ipynb)** — selects a quota sample from a skewed respondent panel, hitting census-style age/gender/region targets exactly (fully offline, synthetic data).
+- **[Carving vs the cube method](notebooks/carving_vs_cube_method.ipynb)** — an honest head-to-head against balanced sampling from survey statistics (Deville & Tillé 2004), including a numpy implementation of the cube method and a planted hidden attribute.
+- **[Hybrid randomized carving](notebooks/hybrid_randomized_carving.ipynb)** — demonstrates the `randomize` parameter: identical balance, with within-cell randomness that collapses the solver's tie-breaking wander on unconstrained attributes.
 
 Runnable scripts in the [`examples/`](examples/) folder:
 

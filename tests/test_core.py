@@ -542,3 +542,85 @@ class TestUndersampleWithPrereduce:
             undersample_dataset(
                 uniform_data, data_to_keep=100, prereduce=True, **QUIET,
             )
+
+
+# --------------------------------------------- hybrid randomized carving
+
+
+class TestRandomizedCarving:
+    @pytest.fixture(scope="class")
+    def skewed_pool(self):
+        rng = np.random.default_rng(40)
+        return rng.beta(2, 5, size=(5000, 3))
+
+    def _histograms(self, data, mask, bins=10):
+        lo, hi = data.min(axis=0), data.max(axis=0)
+        return [
+            np.histogram(
+                (data[mask][:, d] - lo[d]) / (hi[d] - lo[d]),
+                bins=bins, range=(0, 1),
+            )[0]
+            for d in range(data.shape[1])
+        ]
+
+    def test_marginals_identical_to_deterministic(self, skewed_pool):
+        kwargs = dict(data_to_keep=500, bins=10, **QUIET)
+        det = undersample_dataset(skewed_pool, **kwargs)
+        rnd = undersample_dataset(skewed_pool, randomize=1, **kwargs)
+        assert rnd.sum() == det.sum() == 500
+        for h_det, h_rnd in zip(
+            self._histograms(skewed_pool, det),
+            self._histograms(skewed_pool, rnd),
+        ):
+            np.testing.assert_array_equal(h_det, h_rnd)
+
+    def test_same_seed_reproducible(self, skewed_pool):
+        kwargs = dict(data_to_keep=300, randomize=42, **QUIET)
+        m1 = undersample_dataset(skewed_pool, **kwargs)
+        m2 = undersample_dataset(skewed_pool, **kwargs)
+        np.testing.assert_array_equal(m1, m2)
+
+    def test_different_seeds_differ(self, skewed_pool):
+        m1 = undersample_dataset(skewed_pool, data_to_keep=300,
+                                 randomize=1, **QUIET)
+        m2 = undersample_dataset(skewed_pool, data_to_keep=300,
+                                 randomize=2, **QUIET)
+        assert not np.array_equal(m1, m2)
+
+    def test_default_none_matches_previous_behavior(self, skewed_pool):
+        """Backward compatibility: omitting randomize = old deterministic path."""
+        m_old = undersample_dataset(skewed_pool, data_to_keep=300, **QUIET)
+        m_new = undersample_dataset(skewed_pool, data_to_keep=300,
+                                    randomize=None, **QUIET)
+        np.testing.assert_array_equal(m_old, m_new)
+
+    def test_with_categorical_dims(self):
+        rng = np.random.default_rng(41)
+        n = 4000
+        data = np.column_stack([
+            rng.random(n),
+            rng.choice([0.0, 1.0, 2.0], n, p=[0.7, 0.2, 0.1]),
+        ])
+        mask = undersample_dataset(
+            data, data_to_keep=300, categorical_dims=[1],
+            randomize=7, **QUIET,
+        )
+        counts = [np.sum(data[mask][:, 1] == c) for c in (0.0, 1.0, 2.0)]
+        assert np.all(np.abs(np.array(counts) - 100) <= 2), counts
+
+    def test_with_prereduce(self):
+        rng = np.random.default_rng(42)
+        data = rng.beta(8, 8, size=(30_000, 2))
+        mask = undersample_dataset(
+            data, data_to_keep=400, prereduce=100, randomize=3, **QUIET,
+        )
+        assert mask.shape == (30_000,)
+        assert mask.sum() == 400
+
+    def test_invalid_randomize_raises(self, skewed_pool):
+        with pytest.raises(ValueError, match="randomize"):
+            undersample_dataset(skewed_pool, data_to_keep=100,
+                                randomize=True, **QUIET)
+        with pytest.raises(ValueError, match="randomize"):
+            undersample_dataset(skewed_pool, data_to_keep=100,
+                                randomize="yes", **QUIET)

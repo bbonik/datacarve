@@ -410,6 +410,7 @@ def undersample_dataset(
     max_solver_time_sec: float = 10.0,
     verbose: bool = True,
     scatterplot_matrix: bool | Literal["auto"] = "auto",
+    randomize: int | None = None,
 ) -> np.ndarray:
     """
     Undersample a dataset by imposing distributional and correlational
@@ -506,6 +507,25 @@ def undersample_dataset(
         Whether to display scatterplot matrices of the original and
         undersampled datasets. With 'auto', plots are shown only for
         datasets of 10 or fewer dimensions.
+    randomize : int, optional
+        Seed enabling **hybrid randomized carving**. The MILP still
+        decides *how many* rows to take from each joint quantization
+        cell (the combination of bin indices across all attributes), but
+        *which* rows fill each cell's quota is then drawn at random from
+        that cell's members. Rows within a cell are interchangeable with
+        respect to every histogram constraint, so **all marginal
+        histograms of the result are identical** to the deterministic
+        solution — but the selection is now random *conditional on the
+        constrained attributes*, which neutralizes the solver's
+        arbitrary tie-breaking on attributes you did not constrain
+        (measured or unmeasured). Use different seeds to draw multiple
+        equivalent subsets and gauge the spread of downstream metrics.
+
+        Trade-off: the correlation-minimization term (``lamda``) is
+        evaluated on the deterministic solution; the redrawn subset may
+        be slightly off-optimum for that soft objective (the histogram
+        constraints are unaffected). With ``None`` (default), behavior
+        is exactly as before: deterministic, correlation-optimal.
 
     Returns
     -------
@@ -575,6 +595,13 @@ def undersample_dataset(
             )
         if prereduce < 1:
             raise ValueError(f"prereduce must be >= 1, got {prereduce}")
+
+    if randomize is not None and (
+        isinstance(randomize, bool) or not isinstance(randomize, int)
+    ):
+        raise ValueError(
+            f"randomize must be None or an int seed, got {randomize!r}."
+        )
 
     if scatterplot_matrix == "auto":
         scatterplot_matrix = n_dimensions <= 10
@@ -779,6 +806,27 @@ def undersample_dataset(
         for i in range(n_observations):
             if x[i].solution_value() > 0.5:
                 indx_selected[i] = True
+
+    # ------------------------------------ hybrid randomized carving
+    # keep the solver's per-cell counts, but redraw *which* rows fill
+    # each cell's quota at random; rows within a joint cell are
+    # interchangeable w.r.t. every histogram constraint, so all
+    # marginals are preserved exactly
+    if randomize is not None and indx_selected.sum() > 0:
+        redraw_rng = np.random.default_rng(randomize)
+        ids = _cell_ids(data_quantized, n_bins_per_dim)
+        redrawn = np.zeros(n_observations, dtype=bool)
+        for cell in np.unique(ids[indx_selected]):
+            members = np.flatnonzero(ids == cell)
+            quota = int(indx_selected[members].sum())
+            chosen = redraw_rng.choice(members, size=quota, replace=False)
+            redrawn[chosen] = True
+        indx_selected = redrawn
+        if verbose:
+            print(
+                f"Randomized within-cell redraw applied "
+                f"(seed {randomize}); marginal histograms unchanged."
+            )
 
     if indx_selected.sum() > 0:
         if scatterplot_matrix:
